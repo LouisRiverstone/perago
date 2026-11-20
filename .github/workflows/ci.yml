@@ -1,0 +1,142 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+      - uses: golangci/golangci-lint-action@v8
+        with: { version: v2.15.0 }
+      - run: go vet ./...
+      - run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      - name: coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+      - uses: actions/upload-artifact@v4
+        with: { name: coverage, path: coverage.out }
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: perago }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready" --health-interval 5s --health-retries 10
+    env:
+      PERAGO_TEST_DIALECT: postgres
+      PERAGO_TEST_DSN: host=localhost user=postgres password=postgres dbname=perago port=5432 sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test -race -p 1 -count=1 ./database/... ./model/...
+
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env: { MYSQL_ROOT_PASSWORD: root, MYSQL_DATABASE: perago }
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -proot" --health-interval 5s --health-retries 20
+    env:
+      PERAGO_TEST_DIALECT: mysql
+      PERAGO_TEST_DSN: root:root@tcp(127.0.0.1:3306)/perago?parseTime=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test -race -p 1 -count=1 ./database/... ./model/...
+
+  # Non-blocking until each one is confirmed green, like migro's dialect jobs.
+  mariadb:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      mariadb:
+        image: mariadb:11
+        env: { MARIADB_ROOT_PASSWORD: root, MARIADB_DATABASE: perago }
+        ports: ["3306:3306"]
+        options: --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 5s --health-retries 20
+    env:
+      PERAGO_TEST_DIALECT: mariadb
+      PERAGO_TEST_DSN: root:root@tcp(127.0.0.1:3306)/perago?parseTime=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test -race -p 1 -count=1 ./database/... ./model/...
+
+  cockroachdb:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      PERAGO_TEST_DIALECT: cockroachdb
+      PERAGO_TEST_DSN: host=localhost user=root dbname=defaultdb port=26257 sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: start cockroachdb
+        run: |
+          docker run -d --name crdb -p 26257:26257 cockroachdb/cockroach:latest-v24.3 start-single-node --insecure
+          for i in $(seq 30); do
+            docker exec crdb ./cockroach sql --insecure -e 'select 1' >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          docker logs crdb; exit 1
+      - run: go test -p 1 -count=1 ./database/... ./model/...
+
+  sqlserver:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env: { ACCEPT_EULA: "Y", MSSQL_SA_PASSWORD: "Perago_Passw0rd" }
+        ports: ["1433:1433"]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Perago_Passw0rd -Q 'select 1'"
+          --health-interval 10s --health-retries 20
+    env:
+      PERAGO_TEST_DIALECT: sqlserver
+      PERAGO_TEST_DSN: sqlserver://sa:Perago_Passw0rd@localhost:1433?database=perago
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: create the test database
+        run: |
+          id=$(docker ps -q --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest)
+          docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Perago_Passw0rd -Q "CREATE DATABASE perago"
+      - run: go test -p 1 -count=1 ./database/... ./model/...
+
+  beanstalkd:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      BEANSTALKD_ADDR: 127.0.0.1:11300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: sudo apt-get install -y beanstalkd && (beanstalkd -l 127.0.0.1 -p 11300 &) && sleep 1
+      - run: go test -count=1 -run TestLiveServer ./beanstalkd/...
