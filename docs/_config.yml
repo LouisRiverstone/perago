@@ -1,6 +1,6 @@
 # Documentation site for GitHub Pages, built by .github/workflows/docs.yml.
 title: perago
-description: Laravel's queues for Go. Jobs, workers, retries, chains, batches and failed jobs on every migro database, Redis, SQS and Beanstalkd.
+description: Laravel's queues for Go. Jobs, workers, retries, chains, batches and failed jobs on any SQL database, Redis, SQS and Beanstalkd.
 url: https://louisriverstone.github.io
 baseurl: /perago
 
@@ -13,7 +13,7 @@ relative_links:
   enabled: true
   collections: false
 
-logo: /assets/logo.jpg
+logo: /assets/logo.png
 search_enabled: true
 heading_anchors: true
 color_scheme: light
