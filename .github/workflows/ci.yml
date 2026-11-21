@@ -16,7 +16,7 @@ jobs:
     defaults:
       run: { working-directory: "${{ matrix.module }}" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ matrix.module }}/go.mod
@@ -39,7 +39,7 @@ jobs:
   vulncheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with: { go-version: stable }
       - run: |
@@ -59,7 +59,7 @@ jobs:
       PERAGO_TEST_DIALECT: postgres
       PERAGO_TEST_DSN: host=localhost user=postgres password=postgres dbname=perago port=5432 sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with: { go-version-file: internal/dbtest/go.mod }
       - run: go test -race -p 1 -count=1 ./...
@@ -79,7 +79,7 @@ jobs:
       PERAGO_TEST_DIALECT: mysql
       PERAGO_TEST_DSN: root:root@tcp(127.0.0.1:3306)/perago?parseTime=true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with: { go-version-file: internal/dbtest/go.mod }
       - run: go test -race -p 1 -count=1 ./...
@@ -101,7 +101,7 @@ jobs:
       PERAGO_TEST_DIALECT: mariadb
       PERAGO_TEST_DSN: root:root@tcp(127.0.0.1:3306)/perago?parseTime=true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with: { go-version-file: internal/dbtest/go.mod }
       - run: go test -race -p 1 -count=1 ./...
@@ -116,7 +116,7 @@ jobs:
       PERAGO_TEST_DIALECT: cockroachdb
       PERAGO_TEST_DSN: host=localhost user=root dbname=defaultdb port=26257 sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with: { go-version-file: internal/dbtest/go.mod }
       - name: start cockroachdb
@@ -147,7 +147,7 @@ jobs:
       PERAGO_TEST_DIALECT: sqlserver
       PERAGO_TEST_DSN: sqlserver://sa:Perago_Passw0rd@localhost:1433?database=perago
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with: { go-version-file: internal/dbtest/go.mod }
       - name: create the test database
@@ -165,7 +165,7 @@ jobs:
     env:
       BEANSTALKD_ADDR: 127.0.0.1:11300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with: { go-version-file: internal/dbtest/go.mod }
       - run: sudo apt-get install -y beanstalkd && (beanstalkd -l 127.0.0.1 -p 11300 &) && sleep 1
