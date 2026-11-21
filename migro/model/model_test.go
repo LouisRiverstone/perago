@@ -9,8 +9,8 @@ import (
 	"github.com/LouisRiverstone/migro/orm"
 	"github.com/LouisRiverstone/migro/schema"
 	"github.com/LouisRiverstone/perago"
-	"github.com/LouisRiverstone/perago/internal/testdb"
-	"github.com/LouisRiverstone/perago/model"
+	"github.com/LouisRiverstone/perago/migro/internal/testdb"
+	"github.com/LouisRiverstone/perago/migro/model"
 )
 
 var ctx = context.Background()

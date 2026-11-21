@@ -4,25 +4,37 @@ on:
     branches: [main]
   pull_request:
 
+# perago is a multi-module repository: the core has no dependencies and every driver or
+# integration is a module of its own, so each one is built, linted and tested on its own.
 jobs:
-  sqlite:
+  modules:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [., redis, sqs, dynamodb, beanstalkd, migro, internal/dbtest]
+    defaults:
+      run: { working-directory: "${{ matrix.module }}" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
       - name: gofmt
         run: |
           out=$(gofmt -l .)
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - uses: golangci/golangci-lint-action@v8
-        with: { version: v2.15.0 }
+        with: { version: v2.15.0, working-directory: "${{ matrix.module }}", args: "--config=${{ github.workspace }}/.golangci.yml" }
       - run: go vet ./...
       - run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: coverage summary
         run: go tool cover -func=coverage.out | tail -1
-      - uses: actions/upload-artifact@v4
-        with: { name: coverage, path: coverage.out }
+      - name: core has no dependencies
+        if: matrix.module == '.'
+        run: |
+          if grep -q '^require' go.mod; then echo "the core module must not require anything"; cat go.mod; exit 1; fi
 
   vulncheck:
     runs-on: ubuntu-latest
@@ -30,7 +42,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: stable }
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: |
+          for m in . redis sqs dynamodb beanstalkd migro; do
+            (cd "$m" && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...) || exit 1
+          done
 
   postgres:
     runs-on: ubuntu-latest
@@ -46,8 +61,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
-      - run: go test -race -p 1 -count=1 ./database/... ./model/...
+        with: { go-version-file: internal/dbtest/go.mod }
+      - run: go test -race -p 1 -count=1 ./...
+        working-directory: internal/dbtest
+      - run: go test -race -p 1 -count=1 ./...
+        working-directory: migro
 
   mysql:
     runs-on: ubuntu-latest
@@ -63,8 +81,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
-      - run: go test -race -p 1 -count=1 ./database/... ./model/...
+        with: { go-version-file: internal/dbtest/go.mod }
+      - run: go test -race -p 1 -count=1 ./...
+        working-directory: internal/dbtest
+      - run: go test -race -p 1 -count=1 ./...
+        working-directory: migro
 
   # Non-blocking until each one is confirmed green, like migro's dialect jobs.
   mariadb:
@@ -82,8 +103,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
-      - run: go test -race -p 1 -count=1 ./database/... ./model/...
+        with: { go-version-file: internal/dbtest/go.mod }
+      - run: go test -race -p 1 -count=1 ./...
+        working-directory: internal/dbtest
+      - run: go test -race -p 1 -count=1 ./...
+        working-directory: migro
 
   cockroachdb:
     runs-on: ubuntu-latest
@@ -94,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: internal/dbtest/go.mod }
       - name: start cockroachdb
         run: |
           docker run -d --name crdb -p 26257:26257 cockroachdb/cockroach:latest-v24.3 start-single-node --insecure
@@ -103,7 +127,10 @@ jobs:
             sleep 2
           done
           docker logs crdb; exit 1
-      - run: go test -p 1 -count=1 ./database/... ./model/...
+      - run: go test -p 1 -count=1 ./...
+        working-directory: internal/dbtest
+      - run: go test -p 1 -count=1 ./...
+        working-directory: migro
 
   sqlserver:
     runs-on: ubuntu-latest
@@ -122,12 +149,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: internal/dbtest/go.mod }
       - name: create the test database
         run: |
           id=$(docker ps -q --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest)
           docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Perago_Passw0rd -Q "CREATE DATABASE perago"
-      - run: go test -p 1 -count=1 ./database/... ./model/...
+      - run: go test -p 1 -count=1 ./...
+        working-directory: internal/dbtest
+      - run: go test -p 1 -count=1 ./...
+        working-directory: migro
 
   beanstalkd:
     runs-on: ubuntu-latest
@@ -137,6 +167,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: go.mod }
+        with: { go-version-file: internal/dbtest/go.mod }
       - run: sudo apt-get install -y beanstalkd && (beanstalkd -l 127.0.0.1 -p 11300 &) && sleep 1
-      - run: go test -count=1 -run TestLiveServer ./beanstalkd/...
+      - run: go test -count=1 -run TestLiveServer ./...
+        working-directory: beanstalkd

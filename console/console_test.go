@@ -131,9 +131,10 @@ func TestMakeCommands(t *testing.T) {
 	f.run(t, 0, "make:job", "SendSMS", "--sync")
 	f.run(t, 0, "make:job-middleware", "RateLimit")
 	f.run(t, 0, "make:queue-table")
-	f.run(t, 0, "queue:failed-table")
-	f.run(t, 0, "make:queue-batches-table", "--table=batches")
-	f.run(t, 0, "make:cache-table")
+	f.run(t, 0, "queue:failed-table", "--dialect=mysql")
+	f.run(t, 2, "make:cache-table", "--dialect=db2")
+	f.run(t, 2, "make:cache-table", "--format=yaml")
+	f.run(t, 0, "make:queue-batches-table", "--table=batches", "--format=migro")
 	read := func(p string) string {
 		b, err := os.ReadFile(filepath.Join(f.app.Root, p))
 		if err != nil {
@@ -150,11 +151,31 @@ func TestMakeCommands(t *testing.T) {
 	if s := read("app/jobs/middleware/rate_limit.go"); !strings.Contains(s, "package middleware") {
 		t.Fatal(s)
 	}
-	if s := read("database/migrations/20261120100000_create_batches_table.go"); !strings.Contains(s, `database.CreateBatchesTable(ctx, s, "batches")`) || !strings.Contains(s, "type CreateBatchesTable struct") {
+	if s := read("database/migrations/20261120100000_create_batches_table.go"); !strings.Contains(s, `peragomigro.CreateBatchesTable(ctx, s, "batches")`) || !strings.Contains(s, "type CreateBatchesTable struct") {
 		t.Fatal(s)
 	}
-	for _, p := range []string{"20261120100000_create_jobs_table.go", "20261120100000_create_failed_jobs_table.go", "20261120100000_create_cache_table.go"} {
-		read("database/migrations/" + p)
+	if s := read("database/migrations/20261120100000_create_jobs_table.sql"); !strings.Contains(s, `CREATE TABLE "jobs" ("id" bigserial primary key`) || !strings.Contains(s, "CREATE INDEX") {
+		t.Fatal(s)
+	}
+	if s := read("database/migrations/20261120100000_create_failed_jobs_table.sql"); !strings.Contains(s, "CREATE TABLE `failed_jobs`") {
+		t.Fatal(s)
+	}
+}
+
+func TestMakeTableOnMigroProject(t *testing.T) {
+	f := newFixture(t)
+	mod := "module app\n\ngo 1.25.0\n\nrequire github.com/LouisRiverstone/migro v0.2.0\n"
+	if err := os.WriteFile(filepath.Join(f.app.Root, "go.mod"), []byte(mod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.run(t, 0, "make:cache-table")
+	f.run(t, 0, "make:queue-table", "--table=jobs_sql", "--format=sql", "--dialect=sqlite")
+	b, err := os.ReadFile(filepath.Join(f.app.Root, "database/migrations/20261120100000_create_cache_table.go"))
+	if err != nil || !strings.Contains(string(b), "peragomigro.CreateCacheTable") {
+		t.Fatalf("%s %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.app.Root, "database/migrations/20261120100000_create_jobs_sql_table.sql")); err != nil {
+		t.Fatal(err)
 	}
 }
 

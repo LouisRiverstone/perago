@@ -9,34 +9,29 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LouisRiverstone/migro"
 	"github.com/LouisRiverstone/perago"
 )
 
-func run(ctx context.Context, db *migro.DB, code perago.Code, query string, args ...any) (int64, error) {
-	res := db.Gorm.WithContext(ctx).Exec(query, args...)
-	if res.Error != nil {
-		return 0, perago.Wrap(code, res.Error, "database")
-	}
-	return res.RowsAffected, nil
+func run(ctx context.Context, db *DB, code perago.Code, query string, args ...any) (int64, error) {
+	return db.exec(ctx, code, query, args...)
 }
 
 // FailedJobStore keeps failed jobs in the failed_jobs table.
 type FailedJobStore struct {
-	db  *migro.DB
+	db  *DB
 	sql sqlBuilder
 	now func() time.Time
 }
 
 // NewFailedJobStore returns the database failed job store ("" uses failed_jobs).
-func NewFailedJobStore(db *migro.DB, table string) *FailedJobStore {
-	return &FailedJobStore{db: db, sql: sqlBuilder{db: db, table: or(table, FailedTable)}, now: time.Now}
+func NewFailedJobStore(db *DB, table string) *FailedJobStore {
+	return &FailedJobStore{db: db, sql: sqlBuilder{dialect: db.dialect, table: or(table, FailedTable)}, now: time.Now}
 }
 
 var failedCols = []string{"uuid", "connection", "queue", "payload", "exception", "failed_at"}
 
 func (s *FailedJobStore) Log(ctx context.Context, f perago.FailedJob) error {
-	return s.db.Transaction(ctx, func(tx *migro.DB) error {
+	return s.db.transaction(ctx, func(tx *DB) error {
 		if _, err := run(ctx, tx, perago.StoreFailed, "DELETE FROM "+s.sql.t()+" WHERE "+s.sql.q("uuid")+" = ?", f.ID); err != nil {
 			return err
 		}
@@ -51,7 +46,7 @@ func (s *FailedJobStore) query(ctx context.Context, where string, args ...any) (
 		q += " WHERE " + where
 	}
 	q += " ORDER BY " + s.sql.q("failed_at") + " DESC"
-	rows, err := s.db.Gorm.WithContext(ctx).Raw(q, args...).Rows()
+	rows, err := s.db.query(ctx, q, args...)
 	if err != nil {
 		return nil, perago.Wrap(perago.StoreFailed, err, "list failed jobs")
 	}
@@ -95,7 +90,7 @@ func (s *FailedJobStore) IDs(ctx context.Context, queue string) ([]string, error
 		q += " WHERE " + s.sql.q("queue") + " = ?"
 		args = append(args, queue)
 	}
-	rows, err := s.db.Gorm.WithContext(ctx).Raw(q+" ORDER BY "+s.sql.q("failed_at")+" ASC", args...).Rows()
+	rows, err := s.db.query(ctx, q+" ORDER BY "+s.sql.q("failed_at")+" ASC", args...)
 	if err != nil {
 		return nil, perago.Wrap(perago.StoreFailed, err, "failed job ids")
 	}
@@ -129,13 +124,13 @@ func (s *FailedJobStore) Prune(ctx context.Context, before time.Time) (int64, er
 
 // BatchStore keeps batches in the job_batches table.
 type BatchStore struct {
-	db  *migro.DB
+	db  *DB
 	sql sqlBuilder
 }
 
 // NewBatchStore returns the database batch store ("" uses job_batches).
-func NewBatchStore(db *migro.DB, table string) *BatchStore {
-	return &BatchStore{db: db, sql: sqlBuilder{db: db, table: or(table, BatchesTable)}}
+func NewBatchStore(db *DB, table string) *BatchStore {
+	return &BatchStore{db: db, sql: sqlBuilder{dialect: db.dialect, table: or(table, BatchesTable)}}
 }
 
 var batchCols = []string{"id", "name", "total_jobs", "pending_jobs", "failed_jobs", "failed_job_ids", "options", "cancelled_at", "created_at", "finished_at"}
@@ -189,8 +184,8 @@ func (s *BatchStore) scan(sc interface{ Scan(...any) error }) (*perago.Batch, er
 	return &b, nil
 }
 
-func (s *BatchStore) find(ctx context.Context, db *migro.DB, id string) (*perago.Batch, error) {
-	rows, err := db.Gorm.WithContext(ctx).Raw("SELECT "+s.sql.cols(batchCols...)+" FROM "+s.sql.t()+" WHERE "+s.sql.q("id")+" = ?", id).Rows()
+func (s *BatchStore) find(ctx context.Context, db *DB, id string) (*perago.Batch, error) {
+	rows, err := db.query(ctx, "SELECT "+s.sql.cols(batchCols...)+" FROM "+s.sql.t()+" WHERE "+s.sql.q("id")+" = ?", id)
 	if err != nil {
 		return nil, perago.Wrap(perago.StoreFailed, err, "find batch")
 	}
@@ -227,7 +222,7 @@ func (s *BatchStore) List(ctx context.Context, limit int, before string) ([]*per
 		args = append(args, b.CreatedAt.Unix(), b.CreatedAt.Unix(), b.ID)
 	}
 	q := s.sql.limit(s.sql.cols(batchCols...)+" FROM "+s.sql.t()+where+" ORDER BY "+s.sql.q("created_at")+" DESC, "+s.sql.q("id")+" DESC", limit)
-	rows, err := s.db.Gorm.WithContext(ctx).Raw(q, args...).Rows()
+	rows, err := s.db.query(ctx, q, args...)
 	if err != nil {
 		return nil, perago.Wrap(perago.StoreFailed, err, "list batches")
 	}
@@ -254,7 +249,7 @@ func (s *BatchStore) IncrementTotalJobs(ctx context.Context, id string, n int) e
 // transaction on every dialect, then reads the row and rewrites failed_job_ids.
 func (s *BatchStore) update(ctx context.Context, id, counter string, delta int, ids func([]string) []string) (*perago.Batch, error) {
 	var out *perago.Batch
-	err := s.db.Transaction(ctx, func(tx *migro.DB) error {
+	err := s.db.transaction(ctx, func(tx *DB) error {
 		q := s.sql.q
 		n, err := run(ctx, tx, perago.StoreFailed, "UPDATE "+s.sql.t()+" SET "+q(counter)+" = "+q(counter)+" + ? WHERE "+q("id")+" = ?", delta, id)
 		if err != nil {
@@ -329,14 +324,14 @@ func (s *BatchStore) PruneCancelled(ctx context.Context, before time.Time) (int6
 
 // Cache is a perago.Cache in the cache table. Values longer than CacheValueLength are rejected.
 type Cache struct {
-	db  *migro.DB
+	db  *DB
 	sql sqlBuilder
 	now func() time.Time
 }
 
 // NewCache returns the database cache ("" uses cache).
-func NewCache(db *migro.DB, table string) *Cache {
-	return &Cache{db: db, sql: sqlBuilder{db: db, table: or(table, CacheTable)}, now: time.Now}
+func NewCache(db *DB, table string) *Cache {
+	return &Cache{db: db, sql: sqlBuilder{dialect: db.dialect, table: or(table, CacheTable)}, now: time.Now}
 }
 
 // SetClock replaces the cache's clock (tests).
@@ -362,7 +357,7 @@ func (c *Cache) expiration(ttl time.Duration) int64 {
 
 func (c *Cache) row(ctx context.Context, key string) (value string, exp int64, ok bool, err error) {
 	q := c.sql.q
-	rows, err := c.db.Gorm.WithContext(ctx).Raw("SELECT "+q("value")+", "+q("expiration")+" FROM "+c.sql.t()+" WHERE "+q("key")+" = ?", key).Rows()
+	rows, err := c.db.query(ctx, "SELECT "+q("value")+", "+q("expiration")+" FROM "+c.sql.t()+" WHERE "+q("key")+" = ?", key)
 	if err != nil {
 		return "", 0, false, perago.Wrap(perago.CacheFailed, err, "get %q", key)
 	}
@@ -410,6 +405,13 @@ func (c *Cache) Put(ctx context.Context, key, value string, ttl time.Duration) e
 		if _, err := run(ctx, c.db, perago.CacheFailed, c.sql.insert("key", "value", "expiration"), key, value, exp); err == nil {
 			return nil
 		}
+		// MySQL counts changed rows, not matched ones: an UPDATE writing the stored value again
+		// reports 0 and the INSERT then hits the key. The row already holds what we wanted.
+		var cur string
+		var curExp int64
+		if err := c.db.queryRow(ctx, "SELECT "+q("value")+", "+q("expiration")+" FROM "+c.sql.t()+" WHERE "+q("key")+" = ?", key).Scan(&cur, &curExp); err == nil && cur == value && curExp == exp {
+			return nil
+		}
 	}
 	return perago.Newf(perago.CacheFailed, "put %q: concurrent writers kept racing", key)
 }
@@ -444,7 +446,7 @@ func (c *Cache) Add(ctx context.Context, key, value string, ttl time.Duration) (
 // exists tells a duplicate-key insert error (the key is held) from a real failure.
 func (c *Cache) exists(ctx context.Context, key string) (bool, error) {
 	var n int64
-	row := c.db.Gorm.WithContext(ctx).Raw("SELECT COUNT(*) FROM "+c.sql.t()+" WHERE "+c.sql.q("key")+" = ?", key).Row()
+	row := c.db.queryRow(ctx, "SELECT COUNT(*) FROM "+c.sql.t()+" WHERE "+c.sql.q("key")+" = ?", key)
 	if err := row.Scan(&n); err != nil {
 		return false, perago.Wrap(perago.CacheFailed, err, "exists %q", key)
 	}
@@ -499,11 +501,22 @@ func (c *Cache) ForgetIf(ctx context.Context, key, value string) (bool, error) {
 	return n > 0, err
 }
 
-// Transaction runs fn in a database transaction and an after-commit scope of m: jobs dispatched
-// with the context fn receives to an AfterCommit connection are pushed only once the transaction
+// Transaction runs fn in a transaction on db and an after-commit scope of m: jobs dispatched with
+// the context fn receives to an AfterCommit connection are pushed only once the transaction
 // commits, and dropped when it rolls back.
-func Transaction(ctx context.Context, m *perago.Manager, db *migro.DB, fn func(ctx context.Context, tx *migro.DB) error) error {
+func Transaction(ctx context.Context, m *perago.Manager, db *sql.DB, fn func(ctx context.Context, tx *sql.Tx) error) error {
 	return m.Transaction(ctx, func(ctx context.Context) error {
-		return db.Transaction(ctx, func(tx *migro.DB) error { return fn(ctx, tx) })
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return perago.Wrap(perago.DriverFailed, err, "begin transaction")
+		}
+		if err := fn(ctx, tx); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return perago.Wrap(perago.DriverFailed, err, "commit transaction")
+		}
+		return nil
 	})
 }

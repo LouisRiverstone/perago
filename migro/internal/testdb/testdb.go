@@ -1,5 +1,5 @@
 // Package testdb opens the database the tests run against: SQLite in a temp dir by default, or
-// PERAGO_TEST_DIALECT / PERAGO_TEST_DSN (used by CI for every migro dialect).
+// PERAGO_TEST_DIALECT / PERAGO_TEST_DSN (CI runs every dialect).
 package testdb
 
 import (

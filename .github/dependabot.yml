@@ -1,8 +1,11 @@
 version: 2
 updates:
+  # One entry per Go module: the core has no dependencies, each backend module has its own.
   - package-ecosystem: gomod
-    directory: /
+    directories: [/, /redis, /sqs, /dynamodb, /beanstalkd, /migro, /internal/dbtest]
     schedule: { interval: weekly }
+    groups:
+      aws: { patterns: ["github.com/aws/*"] }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }

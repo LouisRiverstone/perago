@@ -1,19 +1,18 @@
-package database_test
+package dbtest_test
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/LouisRiverstone/migro"
 	"github.com/LouisRiverstone/perago"
 	"github.com/LouisRiverstone/perago/database"
 	"github.com/LouisRiverstone/perago/internal/cachetest"
 	"github.com/LouisRiverstone/perago/internal/drivertest"
-	"github.com/LouisRiverstone/perago/internal/testdb"
 )
 
 var ctx = context.Background()
@@ -37,13 +36,18 @@ func (c *clock) Advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-func setup(t *testing.T) *migro.DB {
+func setup(t *testing.T) *database.DB {
+	db, _ := setupSQL(t)
+	return db
+}
+
+func setupSQL(t *testing.T) (*database.DB, *sql.DB) {
 	t.Helper()
-	db := testdb.Open(t, allTables...)
+	db, sqlDB := open(t, allTables...)
 	if err := database.Install(ctx, db, database.Tables{}); err != nil {
 		t.Fatal(err)
 	}
-	return db
+	return db, sqlDB
 }
 
 func TestDriverConformance(t *testing.T) {
@@ -213,7 +217,7 @@ func (c *Charge) Handle(context.Context) error { charged.Add(int64(c.Amount)); r
 func init() { perago.Register(&Charge{}) }
 
 func TestEndToEndWithAfterCommit(t *testing.T) {
-	db := setup(t)
+	db, sqlDB := setupSQL(t)
 	m, err := perago.New(perago.Config{
 		Default:     "database",
 		Connections: map[string]perago.Connection{"database": {Driver: database.NewDriver(db, database.DriverOptions{}), AfterCommit: true}},
@@ -224,14 +228,14 @@ func TestEndToEndWithAfterCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = database.Transaction(ctx, m, db, func(ctx context.Context, tx *migro.DB) error {
+	err = database.Transaction(ctx, m, sqlDB, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := m.Dispatch(&Charge{Amount: 5}).Send(ctx)
 		return err
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = database.Transaction(ctx, m, db, func(ctx context.Context, tx *migro.DB) error {
+	_ = database.Transaction(ctx, m, sqlDB, func(ctx context.Context, tx *sql.Tx) error {
 		_, _ = m.Dispatch(&Charge{Amount: 1000}).Send(ctx)
 		return perago.Newf(perago.InvalidConfig, "rollback")
 	})

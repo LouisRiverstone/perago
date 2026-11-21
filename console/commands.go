@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/LouisRiverstone/perago"
+	"github.com/LouisRiverstone/perago/database"
 )
 
 var workerBools = []string{"once", "stop-when-empty", "force"}
@@ -37,10 +38,10 @@ func (a *App) commands() map[string]command {
 		{name: "queue:prune-batches", usage: "queue:prune-batches [--hours=24] [--unfinished=] [--cancelled=]", summary: "Delete old batch records", run: pruneBatches},
 		{name: "make:job", usage: "make:job <Name> [--sync] [--batched]", summary: "Create a job", bools: []string{"sync", "batched"}, run: makeJob},
 		{name: "make:job-middleware", usage: "make:job-middleware <Name>", summary: "Create a job middleware", run: makeMiddleware},
-		{name: "make:queue-table", usage: "make:queue-table [--table=jobs]", summary: "Create a migration for the jobs table", run: makeTable("jobs", "CreateJobsTable")},
-		{name: "make:queue-failed-table", usage: "make:queue-failed-table [--table=failed_jobs]", summary: "Create a migration for the failed jobs table", run: makeTable("failed_jobs", "CreateFailedJobsTable")},
-		{name: "make:queue-batches-table", usage: "make:queue-batches-table [--table=job_batches]", summary: "Create a migration for the job batches table", run: makeTable("job_batches", "CreateBatchesTable")},
-		{name: "make:cache-table", usage: "make:cache-table [--table=cache]", summary: "Create a migration for the cache table (locks, limits, signals)", run: makeTable("cache", "CreateCacheTable")},
+		{name: "make:queue-table", usage: "make:queue-table [--table=jobs] [--format=migro|sql] [--dialect=postgres]", summary: "Create a migration for the jobs table", run: makeTable(database.JobsTable, "CreateJobsTable")},
+		{name: "make:queue-failed-table", usage: "make:queue-failed-table [--table=failed_jobs] [--format=migro|sql] [--dialect=postgres]", summary: "Create a migration for the failed jobs table", run: makeTable(database.FailedTable, "CreateFailedJobsTable")},
+		{name: "make:queue-batches-table", usage: "make:queue-batches-table [--table=job_batches] [--format=migro|sql] [--dialect=postgres]", summary: "Create a migration for the job batches table", run: makeTable(database.BatchesTable, "CreateBatchesTable")},
+		{name: "make:cache-table", usage: "make:cache-table [--table=cache] [--format=migro|sql] [--dialect=postgres]", summary: "Create a migration for the cache table (locks, limits, signals)", run: makeTable(database.CacheTable, "CreateCacheTable")},
 	}
 	out := make(map[string]command, len(list)+3)
 	for _, c := range list {

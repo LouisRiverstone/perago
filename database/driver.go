@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LouisRiverstone/migro"
 	"github.com/LouisRiverstone/perago"
 )
 
@@ -23,29 +22,25 @@ type DriverOptions struct {
 
 // Driver is the database queue driver.
 type Driver struct {
-	db         *migro.DB
+	db         *DB
 	sql        sqlBuilder
 	retryAfter time.Duration
 	now        func() time.Time
 }
 
 // NewDriver returns the database queue driver on db.
-func NewDriver(db *migro.DB, o DriverOptions) *Driver {
+func NewDriver(db *DB, o DriverOptions) *Driver {
 	if o.RetryAfter <= 0 {
 		o.RetryAfter = 90 * time.Second
 	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Driver{db: db, sql: sqlBuilder{db: db, table: or(o.Table, JobsTable)}, retryAfter: o.RetryAfter, now: o.Now}
+	return &Driver{db: db, sql: sqlBuilder{dialect: db.dialect, table: or(o.Table, JobsTable)}, retryAfter: o.RetryAfter, now: o.Now}
 }
 
 func (d *Driver) exec(ctx context.Context, query string, args ...any) (int64, error) {
-	res := d.db.Gorm.WithContext(ctx).Exec(query, args...)
-	if res.Error != nil {
-		return 0, perago.Wrap(perago.DriverFailed, res.Error, "database queue")
-	}
-	return res.RowsAffected, nil
+	return d.db.exec(ctx, perago.DriverFailed, query, args...)
 }
 
 func (d *Driver) Push(ctx context.Context, m perago.Message) (string, error) {
@@ -60,8 +55,8 @@ func (d *Driver) Push(ctx context.Context, m perago.Message) (string, error) {
 // PushBulk inserts the messages in one transaction.
 func (d *Driver) PushBulk(ctx context.Context, ms []perago.Message) ([]string, error) {
 	ids := make([]string, 0, len(ms))
-	err := d.db.Transaction(ctx, func(tx *migro.DB) error {
-		inner := &Driver{db: tx, sql: sqlBuilder{db: tx, table: d.sql.table}, retryAfter: d.retryAfter, now: d.now}
+	err := d.db.transaction(ctx, func(tx *DB) error {
+		inner := &Driver{db: tx, sql: d.sql, retryAfter: d.retryAfter, now: d.now}
 		for _, m := range ms {
 			id, err := inner.Push(ctx, m)
 			if err != nil {
@@ -94,7 +89,7 @@ func (d *Driver) Pop(ctx context.Context, queue string) (perago.Reserved, error)
 	now := d.now().Unix()
 	expired := now - int64(d.retryAfter/time.Second)
 	sel := d.sql.limit(d.sql.cols("id", "attempts")+" FROM "+d.sql.t()+" WHERE "+q("queue")+" = ? AND "+d.available()+" ORDER BY "+q("id")+" ASC", popCandidates)
-	rows, err := d.db.Gorm.WithContext(ctx).Raw(sel, queue, now, expired).Rows()
+	rows, err := d.db.query(ctx, sel, queue, now, expired)
 	if err != nil {
 		return nil, perago.Wrap(perago.PopFailed, err, "select jobs")
 	}
@@ -125,7 +120,7 @@ func (d *Driver) Pop(ctx context.Context, queue string) (perago.Reserved, error)
 			continue
 		}
 		var payload string
-		row := d.db.Gorm.WithContext(ctx).Raw("SELECT "+q("payload")+" FROM "+d.sql.t()+" WHERE "+q("id")+" = ?", c.id).Row()
+		row := d.db.queryRow(ctx, "SELECT "+q("payload")+" FROM "+d.sql.t()+" WHERE "+q("id")+" = ?", c.id)
 		if err := row.Scan(&payload); err != nil {
 			return nil, perago.Wrap(perago.PopFailed, err, "load job %d", c.id)
 		}
@@ -136,7 +131,7 @@ func (d *Driver) Pop(ctx context.Context, queue string) (perago.Reserved, error)
 
 func (d *Driver) count(ctx context.Context, where string, args ...any) (int64, error) {
 	var n int64
-	row := d.db.Gorm.WithContext(ctx).Raw("SELECT COUNT(*) FROM "+d.sql.t()+" WHERE "+where, args...).Row()
+	row := d.db.queryRow(ctx, "SELECT COUNT(*) FROM "+d.sql.t()+" WHERE "+where, args...)
 	if err := row.Scan(&n); err != nil {
 		return 0, perago.Wrap(perago.DriverFailed, err, "count jobs")
 	}
@@ -169,7 +164,7 @@ func (d *Driver) ReservedSize(ctx context.Context, queue string) (int64, error) 
 func (d *Driver) OldestPending(ctx context.Context, queue string) (time.Time, error) {
 	q := d.sql.q
 	var ts sql.NullInt64
-	row := d.db.Gorm.WithContext(ctx).Raw("SELECT MIN("+q("created_at")+") FROM "+d.sql.t()+" WHERE "+q("queue")+" = ? AND "+q("reserved_at")+" IS NULL", queue).Row()
+	row := d.db.queryRow(ctx, "SELECT MIN("+q("created_at")+") FROM "+d.sql.t()+" WHERE "+q("queue")+" = ? AND "+q("reserved_at")+" IS NULL", queue)
 	if err := row.Scan(&ts); err != nil {
 		return time.Time{}, perago.Wrap(perago.DriverFailed, err, "oldest pending job")
 	}
