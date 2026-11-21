@@ -1,10 +1,46 @@
 ---
 title: Coming from Laravel
-nav_order: 15
+nav_order: 16
 description: "Laravel queue code and its perago equivalent."
 ---
 
 # Coming from Laravel
+
+perago follows [Laravel's queue documentation](https://laravel.com/docs/queues) (13.x) section by section. The first table tells you where each section lives here; the second translates the code.
+
+<details open markdown="block">
+  <summary>Table of contents</summary>
+  {: .text-delta }
+1. TOC
+{:toc}
+</details>
+
+## Laravel's queue docs, section by section
+
+| Laravel section | perago |
+|---|---|
+| Introduction: connections vs. queues | [Getting started](getting-started.md#connections-and-queues) |
+| Driver notes and prerequisites: database, Redis, Redis Cluster, blocking, SQS overflow storage | [Connections and drivers](drivers.md) |
+| Creating jobs: generating, class structure, `handle` injection, queued relationships | [Creating jobs](jobs.md#class-structure) |
+| Unique jobs, debounced jobs, encrypted jobs | [Creating jobs](jobs.md#unique-jobs) |
+| Job middleware: rate limiting, preventing overlaps, throttling exceptions, releasing, skipping | [Job middleware](middleware.md) |
+| Dispatching jobs: delayed, synchronous, deferred, bulk, preparing, transactions | [Dispatching jobs](dispatching.md) |
+| Job chaining | [Chains](chains.md) |
+| Customizing the queue and connection, routing, forwarding | [Dispatching jobs](dispatching.md#customizing-the-queue-and-connection) |
+| Max job attempts and timeout values | [Attempts, timeouts and errors](retries.md) |
+| SQS FIFO and fair queues | [Dispatching jobs](dispatching.md#sqs-fifo-and-fair-queues) |
+| Queue failover | [Dispatching jobs](dispatching.md#queue-failover) |
+| Error handling: releasing and failing manually | [Attempts, timeouts and errors](retries.md#error-handling) |
+| Job batching | [Batches](batches.md) |
+| Queueing closures | [Dispatching jobs](dispatching.md#queueing-closures) |
+| Running the queue worker, priorities, deployment, signals, expiration, pausing | [Running workers](workers.md) |
+| Supervisor configuration | [Running workers](workers.md#supervisor-configuration) |
+| Dealing with failed jobs | [Failed jobs](failed-jobs.md) |
+| Clearing jobs from queues, monitoring your queues | [Events and monitoring](events.md#monitoring-your-queues) |
+| Testing | [Testing](testing.md) |
+| Job events | [Events and monitoring](events.md#job-events) |
+
+## Code, side by side
 
 | Laravel | perago |
 |---|---|

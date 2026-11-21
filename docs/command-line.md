@@ -1,6 +1,6 @@
 ---
 title: Command line
-nav_order: 14
+nav_order: 15
 description: "The perago CLI, embedding console.App, and every command."
 ---
 

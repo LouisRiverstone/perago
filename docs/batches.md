@@ -1,7 +1,7 @@
 ---
 title: Batches
-nav_order: 9
-description: "Dispatch groups of jobs, track their progress, react to completion and failure."
+nav_order: 10
+description: "Dispatch groups of jobs, track their progress, react to completion and failure, add jobs, cancel, retry and prune batches."
 ---
 
 # Batches
@@ -13,103 +13,299 @@ description: "Dispatch groups of jobs, track their progress, react to completion
 {:toc}
 </details>
 
-Batches need a `Config.Batches` store: `database.NewBatchStore` (table from `perago make:queue-batches-table`), `dynamodb.NewBatchStore`, or `perago.NewMemoryBatchStore()` for a single process.
+A batch is a group of jobs that run in parallel and are tracked together: how many are pending, how many failed, and callbacks when the batch completes. Batches need a store for that bookkeeping, `Config.Batches`:
+
+| Store | Constructor |
+|---|---|
+| Database | `database.NewBatchStore(db, "job_batches")`, table from `perago make:queue-batches-table` (or `database.Install`) |
+| DynamoDB | `dynamodb.NewBatchStore(client, opts)`, see [below](#storing-batches-in-dynamodb) |
+| Memory | `perago.NewMemoryBatchStore()`, one process only |
+
+```
+perago make:queue-batches-table --dialect=postgres
+```
+
+Without a store, dispatching a batch fails with `INVALID_CONFIG`.
 
 ## Defining batchable jobs
 
-Any job can be batched. Batched jobs should check whether their batch was cancelled, or use `middleware.SkipIfBatchCancelled()`:
+Any job can be batched: `perago.Queueable` already includes Laravel's `Batchable`. A batched job should check whether its batch was cancelled before doing its work:
 
 ```go
+type ImportCsv struct {
+	perago.Queueable
+	From, To int
+}
+
 func (j *ImportCsv) Handle(ctx context.Context) error {
 	b, err := j.Batch(ctx)
-	if err != nil || b.Cancelled() {
+	if err != nil {
 		return err
 	}
-	...
+	if b.Cancelled() {
+		return nil // the batch was cancelled: skip the work
+	}
+	return importRows(ctx, j.From, j.To)
 }
 ```
 
-`perago make:job ImportCsv --batched` writes that check for you.
+`perago make:job ImportCsv --batched` writes that check for you, and the [`SkipIfBatchCancelled`](#cancelling-batches) middleware does it without code. `j.BatchID()` returns the id without loading the batch.
 
 ## Dispatching batches
+
+`Bus::batch` is `m.Batch`. Add callbacks, then `Dispatch`:
 
 ```go
 batch, err := m.Batch(
 	&ImportCsv{From: 1, To: 100},
 	&ImportCsv{From: 101, To: 200},
-	[]perago.Job{&FlushCache{}, &Reindex{}}, // a chain inside the batch
+	&ImportCsv{From: 201, To: 300},
 ).
-	Name("Import CSV").
-	OnConnection("redis").OnQueue("imports").
-	Before(func(ctx context.Context, b *perago.Batch) { /* stored, nothing queued yet */ }).
-	Progress(func(ctx context.Context, b *perago.Batch) { /* a job completed */ }).
-	Then(func(ctx context.Context, b *perago.Batch) { /* every job succeeded */ }).
-	Catch(func(ctx context.Context, b *perago.Batch, err error) { /* the first failure */ }).
-	Finally(func(ctx context.Context, b *perago.Batch) { /* every job has run */ }).
+	Before(func(ctx context.Context, b *perago.Batch) {
+		// the batch is stored, but no job is queued yet
+	}).
+	Progress(func(ctx context.Context, b *perago.Batch) {
+		// a job completed successfully
+	}).
+	Then(func(ctx context.Context, b *perago.Batch) {
+		// every job completed successfully
+	}).
+	Catch(func(ctx context.Context, b *perago.Batch, err error) {
+		// the first job failure
+	}).
+	Finally(func(ctx context.Context, b *perago.Batch) {
+		// the batch has finished running
+	}).
 	Dispatch(ctx)
 
-batch.ID
+batch.ID // look the batch up later with m.FindBatch
 ```
 
-The callbacks run inline in the worker that completes the batch. Closures therefore run only when that worker lives in this process. With remote workers, use `ThenJob`, `CatchJob`, `FinallyJob` and `ProgressJob` with registered jobs, which read the batch with `perago.BatchFrom(ctx)` and the error with `perago.ErrorFrom(ctx)`. A chain inside a batch counts each of its jobs. Unique locks do not apply to batched jobs.
+Workers run the jobs in parallel, so they can complete in any order. `DispatchIf(ctx, cond)` dispatches only when `cond` is true.
 
-## Adding jobs to a batch
+The callbacks run in the worker that completes the batch, so a Go closure runs only when that worker is the process that dispatched the batch (an application running its workers in-process). With workers in other processes, use `ThenJob`, `CatchJob`, `FinallyJob` and `ProgressJob` with registered jobs. They travel with the batch, and read it with `perago.BatchFrom(ctx)` and the error with `perago.ErrorFrom(ctx)`:
+
+```go
+type ImportFinished struct {
+	perago.Queueable
+	UserID int64
+}
+
+func (j *ImportFinished) Handle(ctx context.Context) error {
+	b := perago.BatchFrom(ctx)
+	return notify.User(ctx, j.UserID, "import %s finished: %d rows", b.Name, b.TotalJobs)
+}
+
+m.Batch(jobs...).ThenJob(&ImportFinished{UserID: user.ID}).Dispatch(ctx)
+```
+
+{: .note }
+Unique locks do not apply to jobs inside a batch, as in Laravel.
+
+### Naming batches
+
+A name makes a batch easy to recognise in logs, in `queue:failed` and in your own dashboards:
+
+```go
+m.Batch(jobs...).Name("Import CSV").Dispatch(ctx)
+```
+
+### Batch connection and queue
+
+Every job of a batch runs on the same connection and queue:
+
+```go
+m.Batch(jobs...).OnConnection("redis").OnQueue("imports").Dispatch(ctx)
+```
+
+## Chains and batches
+
+A batch can contain chains: pass a `[]perago.Job` (or an `m.Chain(...)`) as an item. The two chains below run in parallel, each one in order:
+
+```go
+m.Batch(
+	[]perago.Job{&ReleasePodcast{ID: 1}, &SendPodcastReleaseNotification{ID: 1}},
+	[]perago.Job{&ReleasePodcast{ID: 2}, &SendPodcastReleaseNotification{ID: 2}},
+).Then(func(ctx context.Context, b *perago.Batch) {
+	// both chains are done
+}).Dispatch(ctx)
+```
+
+Every job of every chain counts towards the batch's totals. The reverse, batches inside a chain, is in [Chains](chains.md#batches-inside-chains).
+
+## Adding jobs to batches
+
+Dispatching thousands of jobs from a web request is slow. Dispatch a few loader jobs instead, and let them fill the batch from the workers:
+
+```go
+m.Batch(&LoadImportBatch{Page: 1}).
+	Then(func(ctx context.Context, b *perago.Batch) { ... }).
+	Name("Import Contacts").
+	Dispatch(ctx)
+```
 
 ```go
 func (j *LoadImportBatch) Handle(ctx context.Context) error {
-	b, _ := j.Batch(ctx)
-	if b.Cancelled() {
-		return nil
+	b, err := j.Batch(ctx)
+	if err != nil || b.Cancelled() {
+		return err
 	}
-	return b.Add(ctx, &ImportContacts{Page: 2}, &ImportContacts{Page: 3})
+	jobs := make([]any, 0, 1000)
+	for i := range 1000 {
+		jobs = append(jobs, &ImportContacts{Row: j.Page*1000 + i})
+	}
+	return b.Add(ctx, jobs...)
 }
 ```
 
+Only a job of the batch can add jobs to it, since the batch is still running then. Added jobs go to the batch's connection and queue.
+
 ## Inspecting batches
 
+A `*perago.Batch` tells you where a batch is:
+
 ```go
-b, err := m.FindBatch(ctx, id)  // Bus::findBatch; ErrBatchNotFound when missing
-b.ID; b.Name; b.TotalJobs; b.PendingJobs; b.FailedJobs; b.FailedJobIDs
-b.ProcessedJobs(); b.Progress()  // 0..100
-b.Finished(); b.Cancelled(); b.HasFailures(); b.HasPendingJobs()
-b, _ = b.Fresh(ctx)
+b.ID             // the batch UUID
+b.Name           // the name, if any
+b.TotalJobs      // jobs assigned to the batch
+b.PendingJobs    // jobs not processed yet
+b.FailedJobs     // jobs that failed
+b.FailedJobIDs   // their UUIDs
+b.ProcessedJobs() // jobs processed so far
+b.Progress()      // 0 to 100
+b.Finished()      // every job has run
+b.Cancelled()     // the batch was cancelled
+b.HasFailures(); b.HasPendingJobs()
+b.CreatedAt; b.FinishedAt; b.CancelledAt
+
+b, err = b.Fresh(ctx) // reload it from the store
 ```
 
-`*Batch` marshals to JSON like Laravel's `Batch::toArray`, so an HTTP handler can return it as is:
+Look a batch up by id with `m.FindBatch` (`Bus::findBatch`). It returns `BATCH_NOT_FOUND` when the id is unknown:
+
+```go
+b, err := m.FindBatch(ctx, id)
+if perago.IsCode(err, perago.BatchNotFound) { ... }
+```
+
+`m.Batches(ctx, limit, before)` lists the most recent batches, for an admin page.
+
+### Returning batches from routes
+
+`*Batch` marshals to JSON with the same fields as Laravel's `Batch::toArray`, so a progress endpoint is a few lines:
 
 ```go
 http.HandleFunc("GET /batch/{id}", func(w http.ResponseWriter, r *http.Request) {
 	b, err := m.FindBatch(r.Context(), r.PathValue("id"))
-	if err != nil { http.NotFound(w, r); return }
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(b)
 })
 ```
 
+```json
+{"id":"9a1f…","name":"Import CSV","totalJobs":300,"pendingJobs":120,"processedJobs":180,
+ "progress":60,"failedJobs":0,"options":{"queue":"imports","allowFailures":false},
+ "createdAt":1800000000,"cancelledAt":null,"finishedAt":null}
+```
+
 ## Cancelling batches
 
-`b.Cancel(ctx)` marks the batch cancelled. Jobs that are already queued still run, unless they check `Cancelled` or use `SkipIfBatchCancelled`.
+Any code with the batch can cancel it, for instance a job that finds the import is broken:
+
+```go
+func (j *ImportCsv) Handle(ctx context.Context) error {
+	b, err := j.Batch(ctx)
+	if err != nil {
+		return err
+	}
+	if j.tooManyErrors() {
+		return b.Cancel(ctx)
+	}
+	...
+}
+```
+
+Cancelling does not remove jobs from the queue: they still run, so they should check `Cancelled`, or use `SkipIfBatchCancelled`, which deletes them without running them:
+
+```go
+func (j *ImportCsv) Middleware() []perago.Middleware {
+	return []perago.Middleware{middleware.SkipIfBatchCancelled()}
+}
+```
 
 ## Batch failures
 
-By default, the first failure cancels the batch and runs the `Catch` callbacks. `AllowFailures()` keeps the batch going. `Finally` still runs once every job has run, and `Then` runs only if every job eventually succeeds.
+When a batched job fails for good, the batch's `Catch` callbacks run. They run only for the **first** failure, and that failure marks the batch as cancelled.
 
-Retry the failed jobs of a batch with `m.RetryBatch(ctx, id)` or `perago queue:retry-batch <id>`. When they succeed, the batch finishes and `Then` runs.
+### Allowing failures
+
+`AllowFailures` keeps the batch going when jobs fail: it is not cancelled, the other jobs keep running, and `Finally` runs once every job has run. `Then` runs only when no job failed, or after the failed ones were retried successfully.
+
+```go
+m.Batch(jobs...).AllowFailures().Dispatch(ctx)
+```
+
+Laravel's `allowFailures(fn)` also runs a closure on each failure. In perago, react to each failure with the job's `Failed` method or a `JobFailed` listener (`e.Job.Payload().BatchID` tells you the batch).
+
+### Retrying failed batch jobs
+
+```
+perago queue:retry-batch 32dbc76c-4f82-4749-b610-a639fe0099b5
+```
+
+or `m.RetryBatch(ctx, id)`. Every failed job of the batch goes back on its queue. When they succeed, the batch finishes and `Then` runs.
 
 ## Pruning batches
 
+Batch records pile up. Delete old ones daily, from cron, a Kubernetes CronJob or a ticker in your app:
+
 ```
-perago queue:prune-batches --hours=48                   # finished batches older than 48h
-perago queue:prune-batches --hours=48 --unfinished=72   # also unfinished ones older than 72h
-perago queue:prune-batches --hours=48 --cancelled=72    # also cancelled ones
+perago queue:prune-batches                              # finished batches older than 24 hours
+perago queue:prune-batches --hours=48                   # ... older than 48 hours
+perago queue:prune-batches --hours=48 --unfinished=72   # also unfinished ones older than 72 hours
+perago queue:prune-batches --hours=48 --cancelled=72    # also cancelled ones older than 72 hours
 ```
+
+Unfinished batches are those whose jobs never all ran, for example because a job failed and was never retried.
 
 ## Storing batches in DynamoDB
 
-The DynamoDB stores live in their own module: `go get github.com/LouisRiverstone/perago/dynamodb`.
+The DynamoDB stores live in their own module:
 
-```go
-db := awsdb.NewFromConfig(cfg)
-Batches: dynamodb.NewBatchStore(db, dynamodb.Options{Table: "job_batches", Application: "myapp", TTL: 30 * 24 * time.Hour}),
+```
+go get github.com/LouisRiverstone/perago/dynamodb
 ```
 
-The table needs a string partition key `application` and a string sort key `id`. Turn on DynamoDB TTL on the `ttl` attribute to expire old batches, which replaces pruning. Counter updates are single atomic `UpdateItem` calls.
+### DynamoDB batch table configuration
+
+Create the table yourself, usually named `job_batches`, with:
+
+- a string partition key `application`: the `Options.Application` value, so several applications can share a table;
+- a string sort key `id`.
+
+To have old batches removed automatically, turn on DynamoDB's TTL on the `ttl` attribute.
+
+### DynamoDB configuration
+
+```go
+cfg, _ := config.LoadDefaultConfig(ctx) // AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION...
+client := awsdynamodb.NewFromConfig(cfg)
+
+m, err := perago.New(perago.Config{
+	// ...
+	Batches: dynamodb.NewBatchStore(client, dynamodb.Options{
+		Table:       "job_batches",
+		Application: "myapp",
+		TTL:         7 * 24 * time.Hour,
+	}),
+})
+```
+
+Counter updates are single atomic `UpdateItem` calls, so concurrent workers never lose a count.
+
+### Pruning batches in DynamoDB
+
+Unlike Laravel's DynamoDB repository, perago's store supports `queue:prune-batches`, but it has to scan the application's items to do it. On large tables, prefer DynamoDB's own TTL: set `Options.TTL`, and every item gets a `ttl` attribute that long after its last update, which DynamoDB deletes once TTL is enabled on the table.

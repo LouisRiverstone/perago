@@ -31,13 +31,15 @@ m.Dispatch(&SendWelcome{UserID: 42}).Delay(time.Minute).Send(ctx)
 | Install perago and run your first worker | [Getting started](getting-started.md) |
 | Pick and configure a backend | [Connections and drivers](drivers.md) |
 | Use perago on a migro project (optional) | [Using with migro](migro.md) |
-| Write jobs: tries, backoff, unique, encrypted, models | [Jobs](jobs.md) |
+| Write jobs, and see how they are serialized | [Creating jobs](jobs.md) |
 | Wrap jobs: rate limits, overlap locks, throttling | [Job middleware](middleware.md) |
-| Dispatch: delays, sync, after commit, routing | [Dispatching](dispatching.md) |
-| Run jobs in sequence or as a tracked group | [Chains](chains.md) and [Batches](batches.md) |
-| Run and deploy workers | [Workers](workers.md) |
+| Dispatch: delays, sync, after commit, routing, closures | [Dispatching jobs](dispatching.md) |
+| Run jobs in sequence | [Chains](chains.md) |
+| Set tries, backoff, timeouts; release or fail by hand | [Attempts, timeouts and errors](retries.md) |
+| Run a tracked group of jobs | [Batches](batches.md) |
+| Run and deploy workers | [Running workers](workers.md) |
 | Inspect and retry failures | [Failed jobs](failed-jobs.md) |
 | Hook into the lifecycle, watch queue sizes | [Events and monitoring](events.md) |
 | Test code that dispatches | [Testing](testing.md) |
 | Look up a command | [Command line](command-line.md) |
-| Translate Laravel code | [Coming from Laravel](coming-from-laravel.md) |
+| Find the perago page for a section of Laravel's docs | [Coming from Laravel](coming-from-laravel.md#laravels-queue-docs-section-by-section) |
