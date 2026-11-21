@@ -1,6 +1,6 @@
 ---
 title: Jobs
-nav_order: 4
+nav_order: 5
 description: "Job structs, registration, options, unique, debounced and encrypted jobs, and models."
 ---
 
@@ -51,25 +51,7 @@ Binary data goes into a `[]byte` field, which JSON stores as base64.
 
 ### Models
 
-`model.Of[T]` is Laravel's `SerializesModels` for migro models. Only the primary key travels, and the worker loads the row again, fresh, before `Handle`. Relations are never serialized, which matches Laravel's `withoutRelations`. List the ones to load again with `With`:
-
-```go
-type SendInvoice struct {
-	perago.DeletesMissingModels          // #[DeleteWhenMissingModels]
-	Order model.Of[Order]
-	Lines model.Many[Line]
-}
-
-model.Use(db) // once, at startup
-m.Dispatch(&SendInvoice{Order: model.New(order).With("Customer")}).Send(ctx)
-
-func (j *SendInvoice) Handle(ctx context.Context) error {
-	order := j.Order.Get()
-	...
-}
-```
-
-When the row is gone, the job fails with `MODEL_NOT_FOUND`. If the job embeds `perago.DeletesMissingModels` (or returns true from `DeleteWhenMissingModels()`), it is deleted quietly instead. Any field type can join in by implementing `perago.Restorable`.
+On a migro project, `model.Of[T]` and `model.Many[T]` put migro models in a job as their primary key and load them again, fresh, before `Handle` (Laravel's `SerializesModels`). See [Using with migro](migro.md#models-in-jobs). Without migro, keep the key in the job and load the row in `Handle`, or give a field type a `Restore` method by implementing `perago.Restorable`.
 
 ## Job options
 

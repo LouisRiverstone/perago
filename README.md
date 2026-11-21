@@ -1,10 +1,13 @@
 <p align="center">
-  <img src="logo.jpg" alt="perago: queues for Go" width="520">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo-dark.png">
+    <img src="logo.png" alt="perago: queues for Go" width="520">
+  </picture>
 </p>
 
 <p align="center">
   Laravel's queues for Go: jobs, workers, retries, middleware, chains, batches and failed jobs,<br>
-  on every <a href="https://github.com/LouisRiverstone/migro">migro</a> database, Redis, Amazon SQS and Beanstalkd.
+  on any SQL database, Redis, Amazon SQS and Beanstalkd. Works with <a href="https://github.com/LouisRiverstone/migro">migro</a>, never requires it.
 </p>
 
 <p align="center">
@@ -16,7 +19,7 @@
 
 ---
 
-**perago** brings [Laravel Queues](https://laravel.com/docs/queues) to Go. Each job is a struct with a `Handle` method. You dispatch it to a connection, and a worker runs it with Laravel's semantics for tries, backoff, timeouts, unique and encrypted jobs, rate limiting, chains, batches, failed jobs and `queue:*` commands. It ships with test fakes too. The database driver runs on top of [migro](https://github.com/LouisRiverstone/migro), so it works on PostgreSQL, CockroachDB, Redshift, MySQL, MariaDB, SQLite, SQL Server and Oracle.
+**perago** brings [Laravel Queues](https://laravel.com/docs/queues) to Go. Each job is a struct with a `Handle` method. You dispatch it to a connection, and a worker runs it with Laravel's semantics for tries, backoff, timeouts, unique and encrypted jobs, rate limiting, chains, batches, failed jobs and `queue:*` commands. It ships with test fakes too. The database driver needs nothing but `database/sql`, so it works on PostgreSQL, CockroachDB, Redshift, MySQL, MariaDB, SQLite, SQL Server and Oracle with whatever driver you already use; on a [migro](https://github.com/LouisRiverstone/migro) project, the `perago/migro` module plugs it into your `*migro.DB`, migrations and models.
 
 ## Install
 
@@ -27,22 +30,31 @@ go get github.com/LouisRiverstone/perago@latest
 go install github.com/LouisRiverstone/perago/cmd/perago@latest
 ```
 
+perago is split into modules, so you only download what you use. The core has no dependencies at all, and **migro is optional**: perago is compatible with it but never requires it. Add `perago/migro` only on a project that already uses migro ([Using with migro](https://louisriverstone.github.io/perago/migro/)).
+
+| Module | `go get` | Brings in |
+|---|---|---|
+| core | `github.com/LouisRiverstone/perago` | nothing: the standard library only. Jobs, workers, chains, batches, middleware, `queuetest`, `console`, the `database` driver and stores (`database/sql`) |
+| Redis | `github.com/LouisRiverstone/perago/redis` | `go-redis` |
+| SQS | `github.com/LouisRiverstone/perago/sqs` | AWS SDK v2 (SQS) |
+| DynamoDB | `github.com/LouisRiverstone/perago/dynamodb` | AWS SDK v2 (DynamoDB) |
+| Beanstalkd | `github.com/LouisRiverstone/perago/beanstalkd` | `go-beanstalk` |
+| migro | `github.com/LouisRiverstone/perago/migro` | [migro](https://github.com/LouisRiverstone/migro): `Connect`, migrations, `model.Of` |
+
 ## A quick look
 
-Generate a job and the queue tables:
+Generate a job and the queue tables (`.sql` files, or migro migrations on a migro project):
 
 ```
 perago make:job ProcessPodcast
-perago make:queue-table && perago make:queue-failed-table && perago make:queue-batches-table && perago make:cache-table
-migro migration:run
+perago make:queue-table --dialect=postgres && perago make:queue-failed-table && perago make:queue-batches-table && perago make:cache-table
 ```
 
 ```go
 // app/jobs/process_podcast.go
 type ProcessPodcast struct {
 	perago.Queueable
-	perago.DeletesMissingModels               // drop the job if the podcast is deleted
-	Podcast model.Of[models.Podcast]           // travels as its key, reloaded by the worker
+	PodcastID int64
 }
 
 func init() { perago.Register(&ProcessPodcast{}) }
@@ -50,19 +62,21 @@ func init() { perago.Register(&ProcessPodcast{}) }
 func (j *ProcessPodcast) Tries() int                { return 5 }
 func (j *ProcessPodcast) Backoff() []time.Duration  { return []time.Duration{10 * time.Second, time.Minute} }
 func (j *ProcessPodcast) Middleware() []perago.Middleware {
-	return []perago.Middleware{middleware.WithoutOverlapping(j.Podcast.Get().ID)}
+	return []perago.Middleware{middleware.WithoutOverlapping(j.PodcastID)}
 }
 
 func (j *ProcessPodcast) Handle(ctx context.Context) error {
-	podcast := j.Podcast.Get()
 	// ... the error you return is retried with backoff until Tries runs out
 	return nil
 }
 ```
 
-Configure the connections once, the way `config/queue.php` does:
+Configure the connections once, the way `config/queue.php` does. Redis is optional: the queue, the cache, failed jobs and batches can all live in your SQL database, and the worker can run inside your own process, so your app and its database are enough.
 
 ```go
+sqlDB, _ := sql.Open("pgx", os.Getenv("DATABASE_URL")) // any database/sql driver
+db, _ := database.New(sqlDB, "postgres")                // or peragomigro.Connect(migroDB)
+
 m, err := perago.New(perago.Config{
 	Default: "database",
 	Connections: map[string]perago.Connection{
@@ -79,7 +93,7 @@ m, err := perago.New(perago.Config{
 Dispatch:
 
 ```go
-m.Dispatch(&ProcessPodcast{Podcast: model.New(podcast)}).OnQueue("podcasts").Delay(10 * time.Minute).Send(ctx)
+m.Dispatch(&ProcessPodcast{PodcastID: podcast.ID}).OnQueue("podcasts").Delay(10 * time.Minute).Send(ctx)
 
 m.Chain(&OptimizePodcast{}, &ReleasePodcast{}).Catch(func(ctx context.Context, err error) { ... }).Dispatch(ctx)
 
@@ -102,13 +116,13 @@ Test without a queue:
 ```go
 fake := queuetest.Fake(m)
 service.Publish(ctx, podcast)
-queuetest.AssertPushed(t, fake, func(j *ProcessPodcast) bool { return j.Podcast.Get().ID == podcast.ID })
+queuetest.AssertPushed(t, fake, func(j *ProcessPodcast) bool { return j.PodcastID == podcast.ID })
 ```
 
 ## What you get
 
-- **Drivers**: database (every migro dialect), Redis (single, Sentinel, Cluster), SQS (FIFO, fair queues, overflow storage), Beanstalkd, sync, deferred, background, failover, null and an in-memory queue
-- **Jobs**: tries, backoff, timeouts, `RetryUntil`/`RetryFor`, max exceptions, fail on timeout, `Failed` hooks, manual `Release`/`Delete`/`Fail`, unique and unique-until-processing jobs, debounced jobs, encrypted jobs with key rotation, models serialized as keys through migro
+- **Drivers**: database (`database/sql` on PostgreSQL, CockroachDB, Redshift, MySQL, MariaDB, SQLite, SQL Server, Oracle), Redis (single, Sentinel, Cluster), SQS (FIFO, fair queues, overflow storage), Beanstalkd, sync, deferred, background, failover, null and an in-memory queue
+- **Jobs**: tries, backoff, timeouts, `RetryUntil`/`RetryFor`, max exceptions, fail on timeout, `Failed` hooks, manual `Release`/`Delete`/`Fail`, unique and unique-until-processing jobs, debounced jobs, encrypted jobs with key rotation, migro models serialized as keys (`perago/migro/model`)
 - **Middleware**: `RateLimited`, `WithoutOverlapping`, `ThrottlesExceptions`, `FailOnException`, `Skip`, `Release`, `SkipIfBatchCancelled`, plus Redis variants
 - **Dispatching**: delays, `DispatchSync`, after-response, bulk, `PrepareForDispatch`, after-commit transactions, queue routing and forwarding, closures
 - **Chains and batches**: catch callbacks, prepend/append to chain, batches inside chains, then/catch/finally/progress, adding jobs, cancelling, `allowFailures`, retrying failed batch jobs, pruning, and DynamoDB storage

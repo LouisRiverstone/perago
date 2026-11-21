@@ -1,6 +1,6 @@
 ---
 title: Job middleware
-nav_order: 5
+nav_order: 6
 description: "RateLimited, WithoutOverlapping, ThrottlesExceptions, FailOnException, Skip, Release and custom middleware."
 ---
 

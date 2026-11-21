@@ -1,6 +1,6 @@
 ---
 title: Workers
-nav_order: 9
+nav_order: 10
 description: "queue:work, priorities, deployment, signals, timeouts, pausing, and Supervisor."
 ---
 
@@ -50,6 +50,25 @@ Workers are long-lived processes, and code changes need a restart (see [deployme
 | `--force` | Work even while `App.Maintenance` reports maintenance mode |
 
 Durations take seconds or Go durations (`90s`, `2m`).
+
+## Running the worker inside your application
+
+A worker does not need a process of its own. `m.Work` blocks until the context is cancelled, so start it in a goroutine of your service: the application dispatches jobs and works them, with nothing but the database (or Redis) next to it.
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+go func() {
+	if _, err := m.Work(ctx, perago.WorkerOptions{Queues: []string{"high", "default"}}); err != nil {
+		slog.Error("worker stopped", "err", err)
+	}
+}()
+
+http.ListenAndServe(":8080", handler) // the handlers call m.Dispatch(...).Send(ctx)
+```
+
+Start several goroutines for more parallelism, each with its own `m.Work` call. When the context is cancelled, each worker finishes its current job and returns. With more than one process (several instances, or separate `queue:work` processes), give the manager a shared cache: see [Choosing a backend](drivers.md#choosing-a-backend-database-or-redis).
 
 ## Queue priorities
 

@@ -1,6 +1,6 @@
 ---
 title: Coming from Laravel
-nav_order: 14
+nav_order: 15
 description: "Laravel queue code and its perago equivalent."
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Errors
-nav_order: 15
+nav_order: 16
 description: "perago's error type and codes."
 ---
 

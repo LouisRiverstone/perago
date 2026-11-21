@@ -1,6 +1,6 @@
 ---
 title: Chains
-nav_order: 7
+nav_order: 8
 description: "Run jobs one after another; catch failures; change the chain from inside a job."
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Dispatching
-nav_order: 6
+nav_order: 7
 description: "Delays, sync and after-response dispatch, bulk, after-commit transactions, routing, failover and closures."
 ---
 
@@ -63,7 +63,7 @@ A job dispatched inside a transaction can run before the transaction commits, an
 // every dispatch on this connection waits (after_commit)
 "database": {Driver: d, AfterCommit: true},
 
-err := database.Transaction(ctx, m, db, func(ctx context.Context, tx *migro.DB) error {
+err := database.Transaction(ctx, m, sqlDB, func(ctx context.Context, tx *sql.Tx) error {
 	order, err := orders.CreateWith(ctx, tx, input)
 	if err != nil {
 		return err // rolled back: the job below is dropped
@@ -72,6 +72,8 @@ err := database.Transaction(ctx, m, db, func(ctx context.Context, tx *migro.DB) 
 	return err
 })
 ```
+
+On migro, `peragomigro.Transaction` does the same with a migro transaction; see [Using with migro](migro.md#dispatching-after-commit).
 
 `m.Dispatch(job).AfterCommit()` and `.BeforeCommit()` decide per dispatch. `j.AfterCommit()`, `j.BeforeCommit()` and embedding `perago.QueueAfterCommit` decide per job. `m.Transaction(ctx, fn)` opens the after-commit scope without a database. `perago.BeginTransaction` gives you `Commit` and `Rollback` to call yourself. Scopes nest.
 

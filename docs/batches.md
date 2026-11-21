@@ -1,6 +1,6 @@
 ---
 title: Batches
-nav_order: 8
+nav_order: 9
 description: "Dispatch groups of jobs, track their progress, react to completion and failure."
 ---
 
@@ -104,6 +104,8 @@ perago queue:prune-batches --hours=48 --cancelled=72    # also cancelled ones
 ```
 
 ## Storing batches in DynamoDB
+
+The DynamoDB stores live in their own module: `go get github.com/LouisRiverstone/perago/dynamodb`.
 
 ```go
 db := awsdb.NewFromConfig(cfg)

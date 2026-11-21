@@ -1,6 +1,6 @@
 ---
 title: Failed jobs
-nav_order: 10
+nav_order: 11
 description: "Storing, listing, retrying, forgetting and pruning failed jobs."
 ---
 
@@ -22,7 +22,7 @@ A job that fails for good is deleted from its queue and written to the `Config.F
 | Memory | `perago.NewMemoryFailedJobStore()` |
 | Disabled | leave `Config.Failed` nil (Laravel's `null` driver) |
 
-The DynamoDB table needs a string partition key `application` and a string sort key `uuid`. Set `Options.TTL` and turn on DynamoDB TTL on the `ttl` attribute to expire old entries.
+The DynamoDB store is in the `github.com/LouisRiverstone/perago/dynamodb` module. Its table needs a string partition key `application` and a string sort key `uuid`. Set `Options.TTL` and turn on DynamoDB TTL on the `ttl` attribute to expire old entries.
 
 ## Cleaning up after failed jobs
 

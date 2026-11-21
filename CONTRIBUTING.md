@@ -9,9 +9,12 @@ git clone https://github.com/<you>/perago.git && cd perago
 git checkout -b feat/my-change
 
 gofmt -l .                  # must print nothing
-go vet ./...
-go test -race -count=1 ./...
+for m in . redis sqs dynamodb beanstalkd migro internal/dbtest; do
+  (cd $m && go vet ./... && go test -race -count=1 ./...)
+done
 ```
+
+The repository is several Go modules: a dependency-free core at the root, and one module per backend or integration (`redis`, `sqs`, `dynamodb`, `beanstalkd`, `migro`), plus `internal/dbtest` for the database tests.
 
 Optional: `pre-commit install` runs `gofmt` and `golangci-lint` before each commit.
 

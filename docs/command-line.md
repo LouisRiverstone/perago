@@ -1,6 +1,6 @@
 ---
 title: Command line
-nav_order: 13
+nav_order: 14
 description: "The perago CLI, embedding console.App, and every command."
 ---
 
@@ -79,7 +79,7 @@ Your own binary can also hand its arguments to `app.Run`, for example `myapp que
 | `make:queue-batches-table` (`queue:batches-table`) | same | Migration for `job_batches` |
 | `make:cache-table` | same | Migration for `cache` (locks, limits, signals) |
 
-The `make:*-table` commands write migro migrations into `database/migrations` (`--table=` renames the table). Run them with `migro migration:run`. Output directories are `App.JobsDir`, `App.MiddlewareDir` and `App.MigrationsDir`.
+The `make:*-table` commands write a migration into `database/migrations` (`--table=` renames the table). On a project whose `go.mod` requires migro it is a migro migration, run with `migro migration:run`; anywhere else it is a `.sql` file for `--dialect` (default `postgres`). `--format=sql` or `--format=migro` overrides the choice. Output directories are `App.JobsDir`, `App.MiddlewareDir` and `App.MigrationsDir`.
 
 When `Env` is `production` (from `PERAGO_ENV` or `APP_ENV`), destructive commands ask for confirmation, or need `--force` when not interactive.
 

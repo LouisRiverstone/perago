@@ -9,7 +9,7 @@ permalink: /
 
 perago is [Laravel Queues](https://laravel.com/docs/queues) for Go. A job is a struct with a `Handle(ctx) error` method. You dispatch it to a connection, and a worker runs it with Laravel's semantics: tries, backoff, timeouts, middleware, unique and encrypted jobs, chains, batches, failed jobs, events, `queue:*` commands and test fakes.
 
-The database driver and stores run on top of [migro](https://github.com/LouisRiverstone/migro), so they work on PostgreSQL, CockroachDB, Redshift, MySQL, MariaDB, SQLite, SQL Server and Oracle. Redis, Amazon SQS and Beanstalkd have their own drivers.
+The database driver and stores need nothing but `database/sql`, so they work on PostgreSQL, CockroachDB, Redshift, MySQL, MariaDB, SQLite, SQL Server and Oracle with any driver. perago works with [migro](https://github.com/LouisRiverstone/migro) through an optional module and never requires it ([Using with migro](migro.md)). Redis, Amazon SQS and Beanstalkd have their own drivers, each in its own module, so the core has no dependencies.
 
 ```go
 type SendWelcome struct {
@@ -30,6 +30,7 @@ m.Dispatch(&SendWelcome{UserID: 42}).Delay(time.Minute).Send(ctx)
 |---|---|
 | Install perago and run your first worker | [Getting started](getting-started.md) |
 | Pick and configure a backend | [Connections and drivers](drivers.md) |
+| Use perago on a migro project (optional) | [Using with migro](migro.md) |
 | Write jobs: tries, backoff, unique, encrypted, models | [Jobs](jobs.md) |
 | Wrap jobs: rate limits, overlap locks, throttling | [Job middleware](middleware.md) |
 | Dispatch: delays, sync, after commit, routing | [Dispatching](dispatching.md) |

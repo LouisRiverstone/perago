@@ -1,6 +1,6 @@
 ---
 title: Events and monitoring
-nav_order: 11
+nav_order: 12
 description: "Queue events, Before/After/Failing/Looping, queue:monitor and queue:clear."
 ---
 

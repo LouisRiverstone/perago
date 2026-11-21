@@ -1,7 +1,7 @@
 ---
 title: Connections and drivers
 nav_order: 3
-description: "Database (every migro dialect), Redis, SQS, Beanstalkd, sync, deferred, background, failover, null and memory."
+description: "Database (database/sql on eight dialects), Redis, SQS, Beanstalkd, sync, deferred, background, failover, null and memory."
 ---
 
 # Connections and drivers
@@ -13,6 +13,47 @@ description: "Database (every migro dialect), Redis, SQS, Beanstalkd, sync, defe
 {:toc}
 </details>
 
+## Choosing a backend: database or Redis
+
+perago needs four things: a **queue**, a **cache** (unique jobs, overlap locks, rate limits, `queue:restart` and `queue:pause`), a **failed job store** and a **batch store**. Any of them can live in your SQL database, so **Redis is never required**:
+
+| | Database only | Redis for the queue | Nothing but the process |
+|---|---|---|---|
+| Queue | `database.NewDriver` | `redis.NewDriver` | `perago.NewMemoryDriver` |
+| Cache | `database.NewCache` | `redis.NewCache` | `perago.NewMemoryCache` (the default) |
+| Failed jobs | `database.NewFailedJobStore` | `database.NewFailedJobStore` | `perago.NewMemoryFailedJobStore` |
+| Batches | `database.NewBatchStore` | `database.NewBatchStore` | `perago.NewMemoryBatchStore` |
+| Survives a restart | yes | yes | no |
+| Several processes or machines | yes | yes | no |
+| Extra services to run | none | Redis | none |
+
+The database is the simplest choice: your application and the database you already have, nothing else. Redis suits very high job rates, and blocking pops (`BlockFor`) pick jobs up without polling. You can also mix them, since every connection has its own driver: a `database` connection and a `redis` one side by side, each with its own workers.
+
+### Database only, no Redis
+
+```go
+sqlDB, _ := sql.Open("pgx", os.Getenv("DATABASE_URL")) // or mysql, sqlite, sqlserver, oracle
+db, _ := database.New(sqlDB, "postgres")
+if err := database.Install(ctx, db, database.Tables{}); err != nil { // jobs, failed_jobs, job_batches, cache
+	return err
+}
+
+m, err := perago.New(perago.Config{
+	Default:     "database",
+	Connections: map[string]perago.Connection{"database": {Driver: database.NewDriver(db, database.DriverOptions{})}},
+	Failed:      database.NewFailedJobStore(db, ""),
+	Batches:     database.NewBatchStore(db, ""),
+	Cache:       database.NewCache(db, ""),
+})
+```
+
+Run the worker inside the same process ([see Workers](workers.md#running-the-worker-inside-your-application)) or as `perago queue:work database` in another one. Any number of workers, on any number of machines, can share the table: the driver claims each job with a conditional `UPDATE`, so no two workers ever run the same one.
+
+{: .warning }
+Leaving `Config.Cache` empty gives an in-process `MemoryCache`. That is enough for a single process, but with two workers, or several instances of your application, set `database.NewCache` (or `redis.NewCache`): otherwise unique jobs, `WithoutOverlapping`, rate limits, `queue:restart` and `queue:pause` are not shared between them.
+
+## Connections
+
 A `perago.Connection` is one entry of Laravel's `config/queue.php`:
 
 ```go
@@ -23,29 +64,40 @@ perago.Connection{
 }
 ```
 
-| Driver | Constructor | Notes |
-|---|---|---|
-| database | `database.NewDriver(db, opts)` | Every migro dialect. `retry_after` is `RetryAfter` (90s). |
-| redis | `redis.NewDriver(client, opts)` | `go-redis` `UniversalClient`: single, Sentinel, Cluster. |
-| sqs | `sqs.NewDriver(client, opts)` | Standard, FIFO and fair queues; overflow storage. |
-| beanstalkd | `beanstalkd.NewDriver(conn, opts)` | `retry_after` is the job TTR. |
-| sync | `perago.SyncDriver()` | Runs the job now and returns its error. |
-| deferred | `perago.DeferredDriver()` | Runs after the current request, in this process. |
-| background | `perago.BackgroundDriver()` | Runs in its own goroutine. |
-| failover | `perago.FailoverDriver("redis", "database")` | Pushes to the first connection that takes the job. |
-| null | `perago.Null()` | Discards jobs. |
-| memory | `perago.NewMemoryDriver(retryAfter)` | A full queue in this process, for tests and single-process apps. |
+| Driver | Module | Constructor | Notes |
+|---|---|---|---|
+| database | core | `database.NewDriver(db, opts)` | Any `database/sql` connection, eight dialects. `retry_after` is `RetryAfter` (90s). |
+| redis | `perago/redis` | `redis.NewDriver(client, opts)` | `go-redis` `UniversalClient`: single, Sentinel, Cluster. |
+| sqs | `perago/sqs` | `sqs.NewDriver(client, opts)` | Standard, FIFO and fair queues; overflow storage. |
+| beanstalkd | `perago/beanstalkd` | `beanstalkd.NewDriver(conn, opts)` | `retry_after` is the job TTR. |
+| sync | core | `perago.SyncDriver()` | Runs the job now and returns its error. |
+| deferred | core | `perago.DeferredDriver()` | Runs after the current request, in this process. |
+| background | core | `perago.BackgroundDriver()` | Runs in its own goroutine. |
+| failover | core | `perago.FailoverDriver("redis", "database")` | Pushes to the first connection that takes the job. |
+| null | core | `perago.Null()` | Discards jobs. |
+| memory | core | `perago.NewMemoryDriver(retryAfter)` | A full queue in this process, for tests and single-process apps. |
 
 ## Database
 
-```go
-import _ "github.com/LouisRiverstone/migro/dialect/postgres" // or mysql, sqlite, sqlserver, oracle
+The `database` package is part of the core module and depends on `database/sql` alone. Open the connection with the driver you already use and name its dialect:
 
-db, _ := migro.Open(migro.Config{Dialect: "postgres", DSN: dsn})
+```go
+sqlDB, _ := sql.Open("pgx", dsn) // pgx, go-sql-driver/mysql, modernc.org/sqlite, go-mssqldb, go-ora...
+db, _ := database.New(sqlDB, "postgres")
 d := database.NewDriver(db, database.DriverOptions{Table: "jobs", RetryAfter: 90 * time.Second})
 ```
 
-Create the table with `perago make:queue-table` (a migro migration) or `database.Install`. The driver runs on PostgreSQL, CockroachDB, Redshift, MySQL, MariaDB, SQLite, SQL Server and Oracle. To reserve a job, it selects a few available rows and then claims one with a conditional `UPDATE`. That update succeeds only while the row is still free and unchanged, so two workers never take the same job, and no dialect needs `SKIP LOCKED`.
+| Dialect | Names `database.New` accepts | Placeholders |
+|---|---|---|
+| PostgreSQL | `postgres`, `postgresql`, `pg`, `pgx` | `$1` |
+| CockroachDB | `cockroachdb`, `cockroach` | `$1` |
+| Redshift | `redshift` | `$1` |
+| MySQL / MariaDB | `mysql`, `mariadb` | `?` |
+| SQLite | `sqlite`, `sqlite3` | `?` |
+| SQL Server | `sqlserver`, `mssql` | `@p1` |
+| Oracle | `oracle`, `oracledb` | `:1` |
+
+`database.New` takes anything with `ExecContext`, `QueryContext` and `QueryRowContext`: a `*sql.DB`, a `*sql.Conn`, or an ORM's pool (GORM's `ConnPool`, for instance). Create the tables with `perago make:queue-table` (a `.sql` file, or a migro migration on a migro project), with `database.TableSQL`, or with `database.Install`. The driver runs on PostgreSQL, CockroachDB, Redshift, MySQL, MariaDB, SQLite, SQL Server and Oracle. To reserve a job, it selects a few available rows and then claims one with a conditional `UPDATE`. That update succeeds only while the row is still free and unchanged, so two workers never take the same job, and no dialect needs `SKIP LOCKED`.
 
 On MySQL and MariaDB the payload columns are `LONGTEXT`, so payloads are not capped at 64 KB.
 
@@ -55,7 +107,15 @@ SQLite allows one writer at a time. Give the DSN a busy timeout (`?_pragma=busy_
 {: .warning }
 Redshift does not enforce unique keys, so `database.NewCache` cannot provide atomic locks there. On Redshift, keep the queue in the database and use a Redis cache.
 
+### With migro
+
+On a migro project, `peragomigro.Connect(mdb)` turns a `*migro.DB` into the `db` above. migro is optional; see [Using with migro](migro.md).
+
 ## Redis
+
+```
+go get github.com/LouisRiverstone/perago/redis
+```
 
 ```go
 rdb := goredis.NewUniversalClient(&goredis.UniversalOptions{Addrs: []string{"localhost:6379"}})
@@ -72,6 +132,10 @@ A queue is a list of ready jobs plus sorted sets of delayed and reserved jobs. L
 On Redis Cluster, wrap queue names in a hash tag (`{default}`), so every key of a queue lands on the same slot. Give each application its own `Prefix` or database, or two apps will take each other's jobs.
 
 ## Amazon SQS
+
+```
+go get github.com/LouisRiverstone/perago/sqs
+```
 
 ```go
 cfg, _ := config.LoadDefaultConfig(ctx)
@@ -96,6 +160,10 @@ sqs.Options{Overflow: sqs.Overflow{
 ```
 
 ## Beanstalkd
+
+```
+go get github.com/LouisRiverstone/perago/beanstalkd
+```
 
 ```go
 conn, _ := beanstalkd.Dial("127.0.0.1:11300")
