@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-21
+
+First release.
+
 ### Added
 
 - Jobs with Laravel's options: tries, backoff, timeouts, `RetryUntil`/`RetryFor`, max exceptions, fail on timeout, crash counting, `Failed` hooks, manual release/delete/fail, unique, unique-until-processing, debounced and encrypted jobs (with key rotation), `PrepareForDispatch`, `Interruptible`.
@@ -17,3 +21,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - `make:*-table` writes `.sql` files, or migro migrations on a migro project.
 - `queuetest`: Queue::fake / Bus::fake with every assertion, fake job interactions and fake batches.
 - Console with every `queue:*` and `make:*` command, and the `perago` CLI.
+
+[Unreleased]: https://github.com/LouisRiverstone/perago/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/LouisRiverstone/perago/releases/tag/v0.1.0
