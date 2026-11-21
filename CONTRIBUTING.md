@@ -1,6 +1,6 @@
 # Contributing to perago
 
-Thanks for helping. The full guide is at **https://louisriverstone.github.io/perago/contributing/** (source: [docs/contributing.md](docs/contributing.md)).
+Thanks for helping. The full guide is at **https://louisriverstone.github.io/perago/contributing.html** (source: [docs/contributing.md](docs/contributing.md)).
 
 ## The short version
 

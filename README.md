@@ -30,7 +30,7 @@ go get github.com/LouisRiverstone/perago@latest
 go install github.com/LouisRiverstone/perago/cmd/perago@latest
 ```
 
-perago is split into modules, so you only download what you use. The core has no dependencies at all, and **migro is optional**: perago is compatible with it but never requires it. Add `perago/migro` only on a project that already uses migro ([Using with migro](https://louisriverstone.github.io/perago/migro/)).
+perago is split into modules, so you only download what you use. The core has no dependencies at all, and **migro is optional**: perago is compatible with it but never requires it. Add `perago/migro` only on a project that already uses migro ([Using with migro](https://louisriverstone.github.io/perago/migro.html)).
 
 | Module | `go get` | Brings in |
 |---|---|---|

@@ -16,6 +16,6 @@ archives:
 checksum:
   name_template: checksums.txt
 changelog:
-  disable: true # release notes come from CHANGELOG.md
+  use: git # unused: the release workflow passes the CHANGELOG.md section as --release-notes
 release:
   github: { owner: LouisRiverstone, name: perago }
